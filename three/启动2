@@ -1,0 +1,125 @@
+import pandas as pd
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.edge.service import Service
+from webdriver_manager.microsoft import EdgeChromiumDriverManager
+import time
+
+# ====================== 运行时手动输入可变配置 ======================
+print("===== 批量查分爬虫配置输入 =====")
+query_url = input("请输入查分系统网址：").strip()
+excel_input_name = input("请输入考生信息Excel文件名（含后缀.xlsx）：").strip()
+excel_out_main = input("请输入输出成绩主文件名（含后缀.xlsx）：").strip()
+excel_out_backup = input("请输入备用输出文件名（含后缀.xlsx）：").strip()
+wait_second = int(input("页面最长等待加载秒数："))
+sleep_after_click = int(input("点击查询后等待页面加载秒数："))
+sleep_back_page = int(input("返回查询页等待间隔秒数："))
+# =================================================================
+
+# 固定XPath配置（页面表格结构不变无需修改）
+score_xpaths = {
+    "语文": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[3]/td[2]",
+    "数学": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[3]/td[3]",
+    "英语": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[3]/td[4]",
+    "物理": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[3]/td[5]",
+    "化学": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[3]/td[6]",
+    "道德与法治": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[3]/td[7]",
+    "历史": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[3]/td[8]",
+    "地理": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[3]/td[9]",
+    "生物": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[3]/td[10]",
+    "体育": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[3]/td[11]",
+    "语级": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[5]/td[2]",
+    "数级": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[5]/td[3]",
+    "英级": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[5]/td[4]",
+    "物级": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[5]/td[5]",
+    "化级": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[5]/td[6]",
+    "道级": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[5]/td[7]",
+    "历级": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[5]/td[8]",
+    "地级": "//*[@id='wrapper']/div[3]/div[3]/table/tbody/tr[5]/td[9]",
+    "生级": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[5]/td[10]",
+    "总分": "//*[@id='wrapper']/div[3]/div[2]/table/tbody/tr[3]/td[12]"
+}
+
+subjects_with_grade = [
+    ("语文", "语级"), ("数学", "数级"), ("英语", "英级"), ("物理", "物级"),
+    ("化学", "化级"), ("道德与法治", "道级"), ("历史", "历级"), ("地理", "地级"), ("生物", "生级")
+]
+subjects_no_grade = ["体育"]
+
+# 读取考生表格
+data = pd.read_excel(excel_input_name)
+
+# 生成输出列
+result_columns = []
+for sub, grade_col in subjects_with_grade:
+    result_columns.append(sub)
+    result_columns.append(grade_col)
+result_columns.extend(subjects_no_grade)
+result_columns.append("总分")
+for col in result_columns:
+    data[col] = None
+
+# 初始化浏览器
+options = webdriver.EdgeOptions()
+options.add_argument("--ignore-certificate-errors")
+driver = webdriver.Edge(
+    service=Service(EdgeChromiumDriverManager().install()),
+    options=options
+)
+driver.get(query_url)
+wait = WebDriverWait(driver, wait_second)
+
+# 循环处理每条考生
+for index, row in data.iterrows():
+    try:
+        ks_ksno = str(row['考生号']).strip()
+        zkzh = str(row['准考证号']).strip()
+        ks_xm = str(row['姓名']).strip()
+        print(f'\n处理第{index+1}条：{ks_xm}（考生号：{ks_ksno}）')
+
+        # 填入表单
+        input_ksno = wait.until(EC.presence_of_element_located((By.ID, 'ks_ksno')))
+        input_ksno.clear()
+        input_ksno.send_keys(ks_ksno)
+
+        input_zkzh = wait.until(EC.presence_of_element_located((By.ID, 'zkzh')))
+        input_zkzh.clear()
+        input_zkzh.send_keys(zkzh)
+
+        input_xm = wait.until(EC.presence_of_element_located((By.ID, 'ks_xm')))
+        input_xm.clear()
+        input_xm.send_keys(ks_xm)
+
+        btn_query = wait.until(EC.element_to_be_clickable((By.ID, 'Button1')))
+        btn_query.click()
+        time.sleep(sleep_after_click)
+
+        # 抓取所有分数
+        for col_name, xpath in score_xpaths.items():
+            try:
+                val = driver.find_element(By.XPATH, xpath).text.strip()
+                data.at[index, col_name] = val
+            except Exception as e:
+                data.at[index, col_name] = f'未找到：{str(e)[:5]}'
+
+        print(f"✅ {ks_xm} 成绩抓取完成")
+        driver.back()
+        time.sleep(sleep_back_page)
+    except Exception as e:
+        print(f"❌ 当前考生查询失败：{str(e)}")
+        for col in result_columns:
+            data.at[index, col] = '查询失败'
+        driver.get(query_url)
+        time.sleep(sleep_back_page)
+
+# 保存文件
+try:
+    data.to_excel(excel_out_main, index=False)
+    print(f'\n结果已保存至：{excel_out_main}')
+except PermissionError:
+    data.to_excel(excel_out_backup, index=False)
+    print(f'\n主文件占用，结果保存至备用文件：{excel_out_backup}')
+
+driver.quit()
